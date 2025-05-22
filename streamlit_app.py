@@ -971,8 +971,29 @@ def main():
     st.sidebar.header("Options")
     option = st.sidebar.selectbox("Choose an option", ["Query Documents", "Upload Documents", "File Manager", "Usage Monitoring"])
 
+    # if option == "Upload Documents":
+    #     st.header("Upload Documents")
+    #     uploaded_files = st.file_uploader(
+    #         "Upload one or more documents",
+    #         type=["pdf", "jpg", "jpeg", "png", "doc", "docx", "pptx", "xlsx", "csv"],
+    #         accept_multiple_files=True
+    #     )
+
+    #     if uploaded_files:
+    #         for f in uploaded_files:
+    #             # old: add_file_to_index(f) … etc
+    #             files = {"file": (f.name, f.getvalue())}
+    #             data  = {"owner": st.session_state.get("username", "anonymous")}
+    #             resp  = requests.post(f"{BACKEND_URL}/upload_document",
+    #                                 files=files, data=data, timeout=300)
+    #             if resp.status_code == 200:
+    #                 st.success(f"Queued {f.name} for processing ✔️")
+    #             else:
+    #                 st.error(f"Upload failed: {resp.text}")
+
     if option == "Upload Documents":
         st.header("Upload Documents")
+
         uploaded_files = st.file_uploader(
             "Upload one or more documents",
             type=["pdf", "jpg", "jpeg", "png", "doc", "docx", "pptx", "xlsx", "csv"],
@@ -981,15 +1002,35 @@ def main():
 
         if uploaded_files:
             for f in uploaded_files:
-                # old: add_file_to_index(f) … etc
-                files = {"file": (f.name, f.getvalue())}
-                data  = {"owner": st.session_state.get("username", "anonymous")}
-                resp  = requests.post(f"{BACKEND_URL}/upload_document",
-                                    files=files, data=data, timeout=300)
+                # ── 1️⃣ run the upload in a spinner (blocking until the API finishes) ──
+                with st.spinner(f"Uploading & indexing **{f.name}** …"):
+                    files = {"file": (f.name, f.getvalue())}
+                    data  = {"owner": st.session_state.get("username", "anonymous")}
+
+                    try:
+                        resp = requests.post(
+                            f"{BACKEND_URL}/upload_document",
+                            files=files,
+                            data=data,
+                            timeout=900          # 15 min – long enough for big PDFs
+                        )
+                    except requests.exceptions.RequestException as err:
+                        st.error(f"Network error while uploading {f.name}: {err}")
+                        continue
+
+                # ── 2️⃣ handle the synchronous “done” response ──
                 if resp.status_code == 200:
-                    st.success(f"Queued {f.name} for processing ✔️")
+                    info = resp.json()            # {status:"done", filename, pages_indexed}
+                    st.success(
+                        f"Indexed **{info['pages_indexed']}** pages "
+                        f"from **{info['filename']}** ✔️"
+                    )
+
+                    # ── 3️⃣ immediately reload the FAISS index & metadata
+                    load_index_and_metadata()
                 else:
-                    st.error(f"Upload failed: {resp.text}")
+                    st.error(f"Upload failed for {f.name}: {resp.text}")
+
 
 
     elif option == "File Manager":

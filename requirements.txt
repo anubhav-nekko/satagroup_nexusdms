@@ -1,0 +1,39 @@
+# API & web
+fastapi
+uvicorn
+
+# AWS, Azure & OpenAI SDKs
+boto3
+azure-storage-blob
+openai
+
+# Embeddings / vector search
+sentence_transformers
+faiss-cpu
+
+# PDF / Office / Imaging
+PyMuPDF
+python-docx
+python-pptx
+pillow
+opencv-python-headless
+
+# Data & utilities
+numpy
+pandas
+pytz
+tiktoken
+requests
+
+# Streamlit front-end
+streamlit
+streamlit-authenticator
+streamlit-cookies-manager
+plotly
+matplotlib
+
+# Multi-part uploads & background tasks
+python-multipart
+
+# External search wrapper
+tavily-python
