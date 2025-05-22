@@ -141,7 +141,7 @@ FAISS_INDEX_PATH = "faiss_index.bin"
 METADATA_STORE_PATH = "metadata_store.pkl"
 
 # AWS S3 setup
-s3_bucket_name = "cholatest1"
+s3_bucket_name = "satagroup-test"
 
 # Users File Path 
 users_file = "users.json"
