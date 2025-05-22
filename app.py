@@ -137,31 +137,57 @@ class Answer(BaseModel):
 def _warm():
     _load_stores()
 
+# @app.post("/upload_document", response_model=UploadAck)
+# async def upload_document(file: UploadFile = File(...),
+#                            owner: str = "anonymous",
+#                            bg: BackgroundTasks = BackgroundTasks()):
+#     fn = file.filename
+#     if not fn:
+#         raise HTTPException(400, "No filename")
+
+#     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(fn).suffix)
+#     tmp.write(await file.read()); tmp.close()
+
+#     # 1) ship raw to S3 (so users can download)
+#     with open(tmp.name, "rb") as fh:
+#         s3.upload_fileobj(fh, BUCKET, fn)
+
+#     # 2) heavy processing in background
+#     def _job():
+#         try:
+#             _process_file(Path(tmp.name), owner)
+#             _persist_stores()
+#         finally:
+#             os.remove(tmp.name)
+#     bg.add_task(_job)
+
+#     return UploadAck(status="queued", filename=fn, pages_indexed=0)
+
 @app.post("/upload_document", response_model=UploadAck)
-async def upload_document(file: UploadFile = File(...),
-                           owner: str = "anonymous",
-                           bg: BackgroundTasks = BackgroundTasks()):
+async def upload_document(
+        file: UploadFile = File(...),
+        owner: str = "anonymous"):
     fn = file.filename
     if not fn:
         raise HTTPException(400, "No filename")
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(fn).suffix)
-    tmp.write(await file.read()); tmp.close()
+    tmp.write(await file.read())
+    tmp.close()
 
-    # 1) ship raw to S3 (so users can download)
+    # 1) store original in S3 so users can download
     with open(tmp.name, "rb") as fh:
         s3.upload_fileobj(fh, BUCKET, fn)
 
-    # 2) heavy processing in background
-    def _job():
-        try:
-            _process_file(Path(tmp.name), owner)
-            _persist_stores()
-        finally:
-            os.remove(tmp.name)
-    bg.add_task(_job)
+    # 2) **process & embed synchronously**
+    try:
+        _process_file(Path(tmp.name), owner)          # ← embeds & adds to FAISS
+        _persist_stores()                             # ← writes & uploads index
+    finally:
+        os.remove(tmp.name)
 
-    return UploadAck(status="queued", filename=fn, pages_indexed=0)
+    pages = sum(1 for m in metadata if m["filename"] == fn)
+    return UploadAck(status="done", filename=fn, pages_indexed=pages)
 
 @app.post("/query_documents_with_page_range", response_model=Answer)
 def query_docs(body: QueryBody):
