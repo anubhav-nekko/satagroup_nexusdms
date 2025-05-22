@@ -1,4 +1,4 @@
-# doc_rag_api.py
+# app.py
 
 """
 ==============
@@ -10,7 +10,7 @@ pip install fastapi uvicorn boto3 sentence_transformers faiss-cpu PyMuPDF
            python-multipart tavily-python pillow pandas python-docx python-pptx
 
 ▶︎ Run
-uvicorn doc_rag_api:app --host 0.0.0.0 --port 8000
+uvicorn app:app --host 0.0.0.0 --port 8000
 """
 
 import os, io, json, uuid, tempfile, pickle, fitz, faiss, boto3
@@ -28,11 +28,10 @@ from PIL import Image
 from tavily import TavilyClient              # pip install tavily-python
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
-REGION   = os.getenv("AWS_REGION", "us-east-1")
-BUCKET   = os.getenv("S3_BUCKET",  "satagroup-test")
-TAVILY   = os.getenv("TAVILY_API", "YOUR-TAVILY-KEY")
-MODEL_ID = os.getenv("BEDROCK_MODEL_ID",
-                     "anthropic.claude-3-7-sonnet-20250219-v1:0")
+REGION   = "us-east-1"
+BUCKET   = "satagroup-test"
+TAVILY   = "YOUR-TAVILY-KEY"
+MODEL_ID = "anthropic.claude-3-7-sonnet-20250219-v1:0"
 INDEX_F  = "faiss_index.bin"
 META_F   = "metadata_store.pkl"
 EMB_DIM  = 768
