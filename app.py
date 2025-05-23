@@ -15,7 +15,7 @@ from tavily import TavilyClient
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 REGION   = "us-east-1"
 BUCKET   = "satagroup-test"
-MODEL_ID = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+MODEL_ID = "arn:aws:bedrock:us-east-1:343218220592:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
 INDEX_F  = "faiss_index.bin"
 META_F   = "metadata_store.pkl"
 EMB_DIM  = 768

@@ -13,7 +13,7 @@ import boto3, botocore
 import tiktoken                                     # pip install tiktoken
 
 DEFAULT_PROMPT   = "Respond with the word: pong"
-DEFAULT_MODEL_ID = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+DEFAULT_MODEL_ID = "arn:aws:bedrock:us-east-1:343218220592:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
 DEFAULT_REGION   = "us-east-1"
 MAX_REPLY_TOKENS = 256                              # you can raise this
 
