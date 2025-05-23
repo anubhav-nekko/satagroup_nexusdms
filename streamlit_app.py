@@ -431,8 +431,8 @@ def main():
                 with st.spinner(f"Uploading & indexing **{f.name}** …"):
                     resp = requests.post(
                         f"{BACKEND_URL}/upload_document",
+                        params={"owner": current_user},   # ← query parameter
                         files={"file": (f.name, f.getvalue())},
-                        data={"owner": current_user},          # owner now compulsory
                         timeout=900
                     )
                 if resp.status_code == 200:
