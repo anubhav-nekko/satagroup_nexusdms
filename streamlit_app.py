@@ -402,41 +402,62 @@ def main():
             accept_multiple_files=True
         )
 
+        # if uploaded_files:
+        #     for f in uploaded_files:
+        #         with st.spinner(f"Uploading & indexing **{f.name}** …"):
+        #             files = {"file": (f.name, f.getvalue())}
+        #             data  = {"owner": current_user}  # store the correct user
+
+        #             try:
+        #                 resp = requests.post(
+        #                     f"{BACKEND_URL}/upload_document",
+        #                     files=files,
+        #                     data=data,
+        #                     timeout=900
+        #                 )
+        #             except requests.exceptions.RequestException as err:
+        #                 st.error(f"Network error while uploading {f.name}: {err}")
+        #                 continue
+
+        #         if resp.status_code == 200:
+        #             info = resp.json()  # {status:"done", filename, pages_indexed}
+        #             st.success(
+        #                 f"Indexed **{info['pages_indexed']}** pages "
+        #                 f"from **{info['filename']}** ✔️"
+        #             )
+        #             load_index_and_metadata()
+        #         else:
+        #             st.error(f"Upload failed for {f.name}: {resp.text}")
         if uploaded_files:
             for f in uploaded_files:
                 with st.spinner(f"Uploading & indexing **{f.name}** …"):
-                    files = {"file": (f.name, f.getvalue())}
-                    data  = {"owner": current_user}  # store the correct user
-
-                    try:
-                        resp = requests.post(
-                            f"{BACKEND_URL}/upload_document",
-                            files=files,
-                            data=data,
-                            timeout=900
-                        )
-                    except requests.exceptions.RequestException as err:
-                        st.error(f"Network error while uploading {f.name}: {err}")
-                        continue
-
-                if resp.status_code == 200:
-                    info = resp.json()  # {status:"done", filename, pages_indexed}
-                    st.success(
-                        f"Indexed **{info['pages_indexed']}** pages "
-                        f"from **{info['filename']}** ✔️"
+                    resp = requests.post(
+                        f"{BACKEND_URL}/upload_document",
+                        files={"file": (f.name, f.getvalue())},
+                        data={"owner": current_user},          # owner now compulsory
+                        timeout=900
                     )
-                    load_index_and_metadata()
+                if resp.status_code == 200:
+                    info = resp.json()
+                    st.success(f"Indexed **{info['pages_indexed']}** pages from **{info['filename']}** ✔️")
+                    load_index_and_metadata()                 # immediately reload
                 else:
                     st.error(f"Upload failed for {f.name}: {resp.text}")
 
     elif option == "File Manager":
         st.header("My Uploaded Files")
         current_user = st.session_state.get("username", "unknown")
-        available_files = list({
-            md["filename"]
-            for md in metadata_store
-            if md.get("owner") == current_user or current_user in md.get("shared_with", [])
+        # available_files = list({
+        #     md["filename"]
+        #     for md in metadata_store
+        #     if md.get("owner") == current_user or current_user in md.get("shared_with", [])
+        # })
+
+        available_files = sorted({
+            rec["filename"] for rec in metadata_store
+            if rec.get("owner") == current_user or current_user in rec.get("shared_with", [])
         })
+
         if available_files:
             for i, fname in enumerate(available_files):
                 col1, col2 = st.columns([0.7, 0.3])
@@ -479,10 +500,15 @@ def main():
         top_k = st.sidebar.slider("Select Top-K Results", min_value=1, max_value=100, value=50, step=1)
 
         current_user = st.session_state.get("username", "unknown")
-        available_files = list({
-            md["filename"]
-            for md in metadata_store
-            if md.get("owner") == current_user or current_user in md.get("shared_with", [])
+        # available_files = list({
+        #     md["filename"]
+        #     for md in metadata_store
+        #     if md.get("owner") == current_user or current_user in md.get("shared_with", [])
+        # })
+
+        available_files = sorted({
+            rec["filename"] for rec in metadata_store
+            if rec.get("owner") == current_user or current_user in rec.get("shared_with", [])
         })
 
         if available_files:
