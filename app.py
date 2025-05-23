@@ -58,7 +58,7 @@ def _ocr_png(png_bytes: bytes) -> str:
                      if b["BlockType"] == "LINE")
 
 # ── Core extractor ─────────────────────────────────────────────────────────
-def _process_file(path: Path, owner: str) -> int:
+def _process_file(path: Path, owner: str, real_name: str) -> int:
     """Return number of non-empty chunks processed."""
     ext = path.suffix.lower()
     chunks: List[Tuple[str,int]] = []
@@ -106,7 +106,7 @@ def _process_file(path: Path, owner: str) -> int:
     for txt, page in chunks:
         faiss_index.add(_embed(txt).reshape(1, -1))
         metadata.append({
-            "filename": path.name,
+            "filename": real_name,
             "page": page,
             "text": txt,
             "owner": owner,
@@ -151,17 +151,18 @@ async def upload_document(file: UploadFile = File(...), owner: str = ""):
     tmp.write(await file.read())
     tmp.close()
 
-    # save original to S3
+    # ① keep original in S3
     with open(tmp.name, "rb") as fh:
         s3.upload_fileobj(fh, BUCKET, fn)
 
-    # extract / embed
+    # ② process + embed
     try:
-        pages = _process_file(Path(tmp.name), owner)
+        pages = _process_file(Path(tmp.name), owner, fn)   # ← capture return value
         _persist_stores()
     finally:
         os.remove(tmp.name)
 
+    # ③ use that value in the response
     return UploadAck(status="done", filename=fn, pages_indexed=pages)
 
 @app.post("/query_documents_with_page_range", response_model=Answer)

@@ -49,7 +49,7 @@ import tiktoken
 
 ENC = tiktoken.get_encoding("cl100k_base")  # ~15 % error on Claude 3
 CTX_LIMIT = 200_000
-BACKEND_URL = "http://127.0.0.1:8000"  # or your server endpoint
+BACKEND_URL = "http://127.0.0.1:8000" 
 
 def n_tokens(text: str) -> int:
     return len(ENC.encode(text))
@@ -268,10 +268,6 @@ def load_index_and_metadata():
         faiss_index = faiss.IndexFlatL2(dimension)
         metadata_store = []
 
-#########################################
-# ... your other local functions (extract_text_from_pdf, etc.) ...
-#########################################
-
 def login():
     display_logo()
     st.title("Ready to Dive In? Sign In!")
@@ -400,32 +396,6 @@ def main():
             accept_multiple_files=True
         )
 
-        # if uploaded_files:
-        #     for f in uploaded_files:
-        #         with st.spinner(f"Uploading & indexing **{f.name}** …"):
-        #             files = {"file": (f.name, f.getvalue())}
-        #             data  = {"owner": current_user}  # store the correct user
-
-        #             try:
-        #                 resp = requests.post(
-        #                     f"{BACKEND_URL}/upload_document",
-        #                     files=files,
-        #                     data=data,
-        #                     timeout=900
-        #                 )
-        #             except requests.exceptions.RequestException as err:
-        #                 st.error(f"Network error while uploading {f.name}: {err}")
-        #                 continue
-
-        #         if resp.status_code == 200:
-        #             info = resp.json()  # {status:"done", filename, pages_indexed}
-        #             st.success(
-        #                 f"Indexed **{info['pages_indexed']}** pages "
-        #                 f"from **{info['filename']}** ✔️"
-        #             )
-        #             load_index_and_metadata()
-        #         else:
-        #             st.error(f"Upload failed for {f.name}: {resp.text}")
         if uploaded_files:
             for f in uploaded_files:
                 with st.spinner(f"Uploading & indexing **{f.name}** …"):
@@ -445,11 +415,6 @@ def main():
     elif option == "File Manager":
         st.header("My Uploaded Files")
         current_user = st.session_state.get("username", "unknown")
-        # available_files = list({
-        #     md["filename"]
-        #     for md in metadata_store
-        #     if md.get("owner") == current_user or current_user in md.get("shared_with", [])
-        # })
 
         available_files = sorted({
             rec["filename"] for rec in metadata_store
@@ -462,9 +427,6 @@ def main():
                 with col1:
                     st.write(fname)
                 with col2:
-                    # if st.button("Delete", key=f"del_{fname}_{i}"):
-                    #     # implement your delete_file function
-                    #     pass
                     if st.button("Delete", key=f"del_{fname}_{i}"):
                         delete_file(fname)
                         load_index_and_metadata()
@@ -502,11 +464,6 @@ def main():
         top_k = st.sidebar.slider("Select Top-K Results", min_value=1, max_value=100, value=50, step=1)
 
         current_user = st.session_state.get("username", "unknown")
-        # available_files = list({
-        #     md["filename"]
-        #     for md in metadata_store
-        #     if md.get("owner") == current_user or current_user in md.get("shared_with", [])
-        # })
 
         available_files = sorted({
             rec["filename"] for rec in metadata_store
@@ -553,17 +510,111 @@ def main():
 
         st.sidebar.header("Previous Conversations")
         user_conversations = st.session_state.chat_history.get(current_user, [])
-        unique_conversations = sorted(user_conversations, key=lambda x: x.get("timestamp", ""), reverse=True)
-        # ... your existing code for listing/saving/deleting/sharing conversations ...
 
-        # Show the chat messages ...
+        # NEW CODE: Sort the entire list by timestamp
+        unique_conversations = sorted(
+            user_conversations, 
+            key=lambda x: x.get("timestamp", ""), 
+            reverse=True
+        )
+
+        for conv in unique_conversations:
+            # Use the conversation's timestamp as a unique identifier.
+            conv_id = conv.get("timestamp")
+            default_label = conv.get("label") or conv.get('messages', [{}])[0].get("content", "")[:50]
+            
+            # Check if this conversation is in rename mode.
+            if st.session_state.get("rename_mode") == conv_id:
+                new_label = st.sidebar.text_input("Rename Conversation", value=default_label, key=f"rename_input_{conv_id}")
+                if st.sidebar.button("Save", key=f"save_rename_{conv_id}"):
+                    user = st.session_state.username
+                    if user in st.session_state.chat_history:
+                        for idx, stored_conv in enumerate(st.session_state.chat_history[user]):
+                            if stored_conv.get("timestamp") == conv_id:
+                                # Only update the label
+                                st.session_state.chat_history[user][idx]["label"] = new_label
+                                break 
+                    save_chat_history(st.session_state.chat_history)
+                    st.session_state["rename_mode"] = None
+                    st.sidebar.success("✅ Conversation renamed successfully!")
+                    st.rerun()
+            else:
+                col1, col2, col3, col4 = st.sidebar.columns([0.5, 0.2, 0.2, 0.1])
+                if col1.button(default_label, key=f"load_{conv_id}"):
+                    st.session_state.current_conversation = conv
+                    st.session_state.messages = conv.get('messages', [])
+                    st.session_state.selected_files = conv.get('files', [])
+                    st.session_state.selected_page_ranges = conv.get('page_ranges', {})
+                    st.rerun()
+                if col2.button("✏️", key=f"rename_button_{conv_id}"):
+                    st.session_state["rename_mode"] = conv_id
+                    st.rerun()
+                if col3.button("🗑️", key=f"delete_{conv_id}"):
+                    st.session_state["confirm_delete_conv"] = conv
+                    st.rerun()
+                if col4.button("📤", key=f"share_chat_{conv_id}"):
+                    st.session_state["share_chat_conv"] = conv
+                    st.session_state["share_chat_conv_id"] = conv_id
+                    st.session_state["share_chat_mode"] = True
+                    st.rerun()
+
+        # Insert the share-chat snippet below the conversation list:
+        if st.session_state.get("share_chat_mode"):
+            st.header("Share Chat Conversation")
+            share_chat_with = st.multiselect("Select user(s) to share with", options=available_usernames)
+            if st.button("Confirm Share Chat"):
+                chat_to_share = st.session_state["share_chat_conv"]
+                # For each target user, append a deep copy of the conversation
+                for user in share_chat_with:
+                    if user in st.session_state.chat_history:
+                        st.session_state.chat_history[user].append(copy.deepcopy(chat_to_share))
+                    else:
+                        st.session_state.chat_history[user] = [copy.deepcopy(chat_to_share)]
+                save_chat_history(st.session_state.chat_history)
+                st.success("Chat conversation shared successfully!")
+                # Reset share mode variables
+                st.session_state["share_chat_mode"] = False
+                st.session_state.pop("share_chat_conv", None)
+                st.session_state.pop("share_chat_conv_id", None)
+                st.rerun()
+
+        # If a conversation is marked for deletion, confirm deletion.
+        if "confirm_delete_conv" in st.session_state:
+            chat_name = (
+                st.session_state["confirm_delete_conv"].get("label")
+                or st.session_state["confirm_delete_conv"].get('messages', [{}])[0].get("content", "")[:50]
+            )
+            st.warning(f"Are you sure you want to delete '{chat_name}' conversation?")
+            ccol1, ccol2 = st.columns(2)
+            with ccol1:
+                if st.button("Confirm Delete"):
+                    user = st.session_state.username
+                    if user in st.session_state.chat_history:
+                        try:
+                            st.session_state.chat_history[user].remove(st.session_state["confirm_delete_conv"])
+                        except ValueError:
+                            pass  # Conversation already removed.
+                        save_chat_history(st.session_state.chat_history)
+                    del st.session_state["confirm_delete_conv"]
+                    st.sidebar.success("Conversation deleted!")
+                    st.rerun()
+            with ccol2:
+                if st.button("Cancel"):
+                    del st.session_state["confirm_delete_conv"]
+                    st.sidebar.info("Deletion canceled.")
+                    st.rerun()
+
+        # --- Display chat messages with share options ---
         for idx, message in enumerate(st.session_state.messages):
             with st.chat_message(message["role"]):
+                # Show role and time if available
                 msg_time = message.get("time", "")
-                role_title = message["role"].title()
+                role_title = message["role"].title()  # "User" / "Assistant"
                 st.markdown(f"**`[{role_title} @ {msg_time}]`**\n\n{message['content']}")
+
                 with st.expander("Show Copyable Text"):
                     st.code(message["content"], language="text")
+
 
         user_message = user_input()
         if user_message:
@@ -619,10 +670,6 @@ def main():
             save_chat_history(st.session_state.chat_history)
             st.rerun()
 
-    # elif option == "Usage Monitoring":
-    #     st.header("Usage Monitoring")
-    #     # ... your usage analytics code ...
-    #     pass
     elif option == "Usage Monitoring":
         ### BEGIN USAGE MONITORING ################################################
         st.header("Usage Monitoring")
