@@ -181,14 +181,12 @@ def download_from_blob_storage(s3_bucket_name, s3_key, local_file_path):
             print(f"Failed to download {s3_key}: {str(e)}")
             return False
 
-def create_word_doc(text):
-    doc = Document()
-    doc.add_heading("Chat Answer", level=1)
-    doc.add_paragraph(text)
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
+# 1) bring back delete_file helper
+def delete_file(file_name):
+    s3_client.delete_object(Bucket=s3_bucket_name, Key=file_name)
+    global metadata_store
+    metadata_store = [r for r in metadata_store if r["filename"] != file_name]
+    save_index_and_metadata()
 
 def generate_titan_embeddings(text):
     try:
@@ -464,9 +462,13 @@ def main():
                 with col1:
                     st.write(fname)
                 with col2:
+                    # if st.button("Delete", key=f"del_{fname}_{i}"):
+                    #     # implement your delete_file function
+                    #     pass
                     if st.button("Delete", key=f"del_{fname}_{i}"):
-                        # implement your delete_file function
-                        pass
+                        delete_file(fname)
+                        load_index_and_metadata()
+                        st.rerun()
         else:
             st.sidebar.info("No files uploaded yet.")
 
@@ -614,13 +616,94 @@ def main():
             user = st.session_state.username
             if user not in st.session_state.chat_history:
                 st.session_state.chat_history[user] = []
-            # Save conversation logic ...
-            # Then st.rerun()
+            save_chat_history(st.session_state.chat_history)
+            st.rerun()
 
+    # elif option == "Usage Monitoring":
+    #     st.header("Usage Monitoring")
+    #     # ... your usage analytics code ...
+    #     pass
     elif option == "Usage Monitoring":
+        ### BEGIN USAGE MONITORING ################################################
         st.header("Usage Monitoring")
-        # ... your usage analytics code ...
-        pass
+
+        # 1️⃣  Choose period and user filters
+        period_options = {
+            "Last 3 Days": 3,
+            "Last 7 Days": 7,
+            "Last 14 Days": 14,
+            "Last 1 Month": 30,
+            "Last 3 Months": 90,
+        }
+        sel_period_lbl = st.sidebar.selectbox("Select Period", list(period_options.keys()), index=3)
+        sel_days      = period_options[sel_period_lbl]
+
+        all_users     = list(USERS.keys())
+        sel_users     = st.sidebar.multiselect("Select User(s)", all_users, default=all_users)
+
+        # 2️⃣  Flatten chat_history → records: [{'user':..,'ts': datetime}, …]
+        records = []
+        for user, convs in st.session_state.chat_history.items():
+            for conv in convs:
+                ts_str = conv.get("timestamp")
+                if ts_str:
+                    try:
+                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                        records.append({"user": user, "timestamp": ts})
+                    except ValueError:
+                        pass  # malformed timestamp → skip
+
+        if not records:
+            st.info("No usage data recorded yet.")
+            ### END USAGE MONITORING #############################################
+            return
+
+        df = pd.DataFrame(records)
+        today = datetime.now()
+        start = today - timedelta(days=sel_days)
+
+        df = df[(df["timestamp"] >= start) & (df["user"].isin(sel_users))]
+        if df.empty:
+            st.info("No activity for the chosen filters.")
+            ### END USAGE MONITORING #############################################
+            return
+
+        # 3️⃣  Total queries per user (BAR)
+        bar_data = df.groupby("user").size().reset_index(name="queries")
+        st.subheader(f"Total Queries per User ({sel_period_lbl})")
+        st.plotly_chart(
+            px.bar(bar_data, x="user", y="queries", labels={"user": "User", "queries": "Queries"}),
+            use_container_width=True
+        )
+
+        # 4️⃣  Daily queries per user with moving average (LINE)
+        df["date"] = df["timestamp"].dt.date
+        daily = df.groupby(["user", "date"]).size().reset_index(name="queries")
+
+        # fill missing dates with 0 per user
+        full_dates = pd.date_range(start=start.date(), end=today.date())
+        filled = []
+        for u in daily["user"].unique():
+            u_df = daily[daily["user"] == u].set_index("date").reindex(full_dates, fill_value=0)
+            u_df = u_df.rename_axis("date").reset_index()
+            u_df["user"] = u
+            u_df["ma"] = u_df["queries"].rolling(window=sel_days, min_periods=1).mean()
+            filled.append(u_df)
+        daily_all = pd.concat(filled, ignore_index=True)
+
+        st.subheader("Daily Queries per User")
+        line_fig = px.line(
+            daily_all, x="date", y="queries", color="user",
+            labels={"date": "Date", "queries": "Queries"}
+        )
+        # add moving-average traces
+        for u in daily_all["user"].unique():
+            u_df = daily_all[daily_all["user"] == u]
+            line_fig.add_scatter(
+                x=u_df["date"], y=u_df["ma"], mode="lines", name=f"{u} MA", line=dict(dash="dash")
+            )
+        st.plotly_chart(line_fig, use_container_width=True)
+        ### END USAGE MONITORING ##################################################
 
 if __name__ == "__main__":
     main()
