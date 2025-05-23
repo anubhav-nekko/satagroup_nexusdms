@@ -3,7 +3,6 @@
 system_message = """
 # You are an advanced HR-tech assistant that specialises in parsing and analysing
 # resumes, CVs and Job Descriptions (JDs) for an HR-consultancy client.
-# ...
 """
 
 prompt_library = {
@@ -335,6 +334,44 @@ def user_input():
         return user_message.strip()
     return None
 
+# ---------- NEW helper ----------
+def commit_current_conversation():
+    """Persist st.session_state.messages ⇒ st.session_state.chat_history
+       and return the conversation dict."""
+    if not st.session_state.messages:
+        return None            # nothing to save
+
+    user = st.session_state.username
+    ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    conv_obj = {
+        "timestamp": ts,
+        "label": st.session_state.messages[0]["content"][:50],
+        "messages": copy.deepcopy(st.session_state.messages),
+        "files":    copy.deepcopy(st.session_state.selected_files),
+        "page_ranges": copy.deepcopy(st.session_state.selected_page_ranges)
+    }
+
+    # --- insert or update ---
+    hist = st.session_state.chat_history.setdefault(user, [])
+    # if we are editing an existing conversation replace it,
+    # else append a brand-new one
+    if st.session_state.get("current_conversation"):          # update path
+        old_ts = st.session_state["current_conversation"]["timestamp"]
+        for i, c in enumerate(hist):
+            if c["timestamp"] == old_ts:
+                hist[i] = conv_obj
+                break
+    else:                                                     # new path
+        hist.append(conv_obj)
+
+    # push to S3
+    save_chat_history(st.session_state.chat_history)
+    # keep pointer up-to-date
+    st.session_state["current_conversation"] = conv_obj
+    return conv_obj
+
+
 def main():
     if not st.session_state["authenticated"]:
         cookie_username = cookies.get("username")
@@ -451,6 +488,7 @@ def main():
         st.sidebar.header("Settings")
         llm_model = st.sidebar.selectbox("Choose Your Model", ["Claude 3"])
         if st.sidebar.button("New Chat"):
+            commit_current_conversation()  
             st.session_state.current_conversation_id = None
             st.session_state.current_conversation = None
             st.session_state.messages = []
@@ -668,6 +706,7 @@ def main():
             if user not in st.session_state.chat_history:
                 st.session_state.chat_history[user] = []
             save_chat_history(st.session_state.chat_history)
+            commit_current_conversation() 
             st.rerun()
 
     elif option == "Usage Monitoring":
