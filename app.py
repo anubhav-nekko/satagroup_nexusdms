@@ -1,54 +1,38 @@
-# app.py
+# app.py  ── synchronous RAG backend
 
-"""
-==============
-A minimal RAG back-end for your Streamlit client.
-
-▶︎ Quick-start
-pip install fastapi uvicorn boto3 sentence_transformers faiss-cpu PyMuPDF
-           python-multipart tavily-python pillow pandas python-docx python-pptx
-
-▶︎ Run
-uvicorn app:app --host 0.0.0.0 --port 8000
-"""
-
-import os, io, json, uuid, tempfile, pickle, fitz, faiss, boto3
+import os, json, tempfile, pickle, fitz, faiss, boto3
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from datetime import datetime
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from docx import Document
 from pptx import Presentation
-from PIL import Image
-from tavily import TavilyClient              # pip install tavily-python
+from tavily import TavilyClient
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 REGION   = "us-east-1"
 BUCKET   = "satagroup-test"
-TAVILY   = "YOUR-TAVILY-KEY"
 MODEL_ID = "anthropic.claude-3-7-sonnet-20250219-v1:0"
 INDEX_F  = "faiss_index.bin"
 META_F   = "metadata_store.pkl"
 EMB_DIM  = 768
 
-# ── AWS clients (re-use across calls) ───────────────────────────────────────
-s3       = boto3.client("s3",      region_name=REGION)
-textract = boto3.client("textract",region_name=REGION)
+# ── AWS clients ─────────────────────────────────────────────────────────────
+s3       = boto3.client("s3", region_name=REGION)
+textract = boto3.client("textract", region_name=REGION)
 bedrock  = boto3.client("bedrock-runtime", region_name=REGION)
 
-# ── Globals (in-memory cache) ───────────────────────────────────────────────
-app          = FastAPI(title="Document-RAG Gateway", version="1.0.0")
-mpnet_model  = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
-faiss_index  : faiss.Index  # Will be loaded at startup
-metadata     : List[Dict]   # Will be loaded at startup
+# ── Globals ─────────────────────────────────────────────────────────────────
+app         = FastAPI(title="Document-RAG Gateway", version="1.1.0")
+embed_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+faiss_index : faiss.Index
+metadata    : List[Dict]
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# ── Utility - load / save stores ────────────────────────────────────────────
 def _load_stores() -> None:
-    """Load FAISS + metadata from S3 (or initialise fresh)."""
     global faiss_index, metadata
     try:
         s3.download_file(BUCKET, INDEX_F, INDEX_F)
@@ -56,7 +40,7 @@ def _load_stores() -> None:
         faiss_index = faiss.read_index(INDEX_F)
         metadata    = pickle.load(open(META_F, "rb"))
     except Exception:
-        faiss_index = faiss.IndexFlatL2(EMB_DIM)         # empty
+        faiss_index = faiss.IndexFlatL2(EMB_DIM)
         metadata    = []
 
 def _persist_stores() -> None:
@@ -65,67 +49,62 @@ def _persist_stores() -> None:
     s3.upload_file(INDEX_F, BUCKET, INDEX_F)
     s3.upload_file(META_F, BUCKET, META_F)
 
-def _embed(txt: str) -> np.ndarray:
-    return mpnet_model.encode(txt, normalize_embeddings=True)
+def _embed(text: str) -> np.ndarray:
+    return embed_model.encode(text, normalize_embeddings=True)
 
-def _ocr_bytes(blob: bytes) -> str:
-    """Use Amazon Textract's detect_document_text for basic OCR."""
-    resp = textract.detect_document_text(Document={'Bytes': blob})
+def _ocr_png(png_bytes: bytes) -> str:
+    resp = textract.detect_document_text(Document={"Bytes": png_bytes})
     return "\n".join(b["Text"] for b in resp.get("Blocks", [])
                      if b["BlockType"] == "LINE")
 
-def _process_file(path: Path, owner: str) -> None:
-    """Extract text, embed, push into FAISS & metadata."""
+# ── Core extractor ─────────────────────────────────────────────────────────
+def _process_file(path: Path, owner: str) -> int:
+    """Return number of non-empty chunks processed."""
     ext = path.suffix.lower()
-    chunks: List[Tuple[str,int]] = []   # [(text,page)]
+    chunks: List[Tuple[str,int]] = []
 
     if ext == ".pdf":
         doc = fitz.open(path)
-        for p in doc:
-            # Convert page to PNG and run OCR
-            png_bytes = p.get_pixmap().tobytes("png")
-            text = _ocr_bytes(png_bytes)
-            chunks.append((text, p.number + 1))
+        for pg in doc:
+            # higher dpi → sharper OCR
+            png = pg.get_pixmap(dpi=300).tobytes("png")
+            text = _ocr_png(png)
+            if text.strip():
+                chunks.append((text, pg.number + 1))
 
     elif ext in {".jpg", ".jpeg", ".png"}:
-        # Single image
-        img_bytes = path.read_bytes()
-        text = _ocr_bytes(img_bytes)
-        chunks.append((text, 1))
+        text = _ocr_png(path.read_bytes())
+        if text.strip():
+            chunks.append((text, 1))
 
     elif ext in {".doc", ".docx"}:
         full = "\n".join(p.text for p in Document(path).paragraphs if p.text)
-        # Simple chunking for docx
-        step = 1000
-        for i in range(0, len(full), step):
-            page_text = full[i:i+step]
-            page_num = (i // step) + 1
-            chunks.append((page_text, page_num))
+        for i in range(0, len(full), 1000):
+            chunk = full[i:i+1000]
+            if chunk.strip():
+                chunks.append((chunk, i//1000 + 1))
 
     elif ext == ".pptx":
         prs = Presentation(path)
         for idx, slide in enumerate(prs.slides, 1):
-            slide_text = "\n".join(s.text for s in slide.shapes if hasattr(s, "text"))
-            chunks.append((slide_text, idx))
+            slide_txt = "\n".join(
+                s.text for s in slide.shapes if hasattr(s, "text")
+            )
+            if slide_txt.strip():
+                chunks.append((slide_txt, idx))
 
     elif ext in {".csv", ".xlsx"}:
-        if ext == ".csv":
-            df = pd.read_csv(path)
-        else:
-            df = pd.read_excel(path)
-        # chunk every 50 rows
+        df = pd.read_csv(path) if ext == ".csv" else pd.read_excel(path)
         for i in range(0, len(df), 50):
-            chunk_text = df.iloc[i:i+50].to_string(index=False)
-            page_num = (i // 50) + 1
-            chunks.append((chunk_text, page_num))
-
+            chunk = df.iloc[i:i+50].to_string(index=False)
+            if chunk.strip():
+                chunks.append((chunk, i//50 + 1))
     else:
-        raise ValueError(f"Unsupported file type: {ext}")
+        raise HTTPException(400, f"Unsupported file type {ext}")
 
     # embed & store
     for txt, page in chunks:
-        vec = _embed(txt)
-        faiss_index.add(vec.reshape(1, -1))
+        faiss_index.add(_embed(txt).reshape(1, -1))
         metadata.append({
             "filename": path.name,
             "page": page,
@@ -133,8 +112,9 @@ def _process_file(path: Path, owner: str) -> None:
             "owner": owner,
             "uploaded": datetime.utcnow().isoformat()
         })
+    return len(chunks)
 
-# ── Pydantic DTOs ───────────────────────────────────────────────────────────
+# ── DTOs ────────────────────────────────────────────────────────────────────
 class UploadAck(BaseModel):
     status: str
     filename: str
@@ -152,104 +132,70 @@ class Answer(BaseModel):
     answer: str
     context: List[Dict]
 
-# ── Start-up ────────────────────────────────────────────────────────────────
+# ── Startup ────────────────────────────────────────────────────────────────
 @app.on_event("startup")
-def _warm():
+def _startup():
     _load_stores()
 
-# ── End-points ───────────────────────────────────────────────────────────────
+# ── Endpoints ──────────────────────────────────────────────────────────────
 @app.post("/upload_document", response_model=UploadAck)
-async def upload_document(file: UploadFile = File(...),
-                          owner: str = "anonymous"):
-    """
-    Upload a single document (PDF, image, DOCX, PPTX, XLSX, CSV) and index it synchronously.
-    """
-    fn = file.filename
-    if not fn:
-        raise HTTPException(400, "No filename")
+async def upload_document(file: UploadFile = File(...), owner: str = ""):
+    if not owner:
+        raise HTTPException(400, "Missing owner field.")
 
-    # Save to a temp file
+    fn = file.filename or ""
+    if not fn:
+        raise HTTPException(400, "No filename provided.")
+
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(fn).suffix)
     tmp.write(await file.read())
     tmp.close()
 
-    # 1) store original in S3 so users can download
+    # save original to S3
     with open(tmp.name, "rb") as fh:
         s3.upload_fileobj(fh, BUCKET, fn)
 
-    # 2) process & embed synchronously
+    # extract / embed
     try:
-        _process_file(Path(tmp.name), owner)  # extracts text, embed, store in FAISS
-        _persist_stores()                    # writes & uploads index/metadata
+        pages = _process_file(Path(tmp.name), owner)
+        _persist_stores()
     finally:
         os.remove(tmp.name)
 
-    # 3) count how many pages/chunks we just added
-    pages = sum(1 for m in metadata if m["filename"] == fn)
     return UploadAck(status="done", filename=fn, pages_indexed=pages)
 
 @app.post("/query_documents_with_page_range", response_model=Answer)
 def query_docs(body: QueryBody):
-    """
-    Given a user prompt, a list of selected files + page ranges, returns top-K hits + LLM answer.
-    """
     if faiss_index.ntotal == 0:
         raise HTTPException(404, "Index empty")
 
-    # embed the user's prompt
     q_vec = _embed(body.prompt).reshape(1, -1)
-    # oversample, we'll filter
     D, I = faiss_index.search(q_vec, min(body.top_k * 5, faiss_index.ntotal))
 
     hits = []
     for dist, idx in zip(D[0], I[0]):
         meta = metadata[idx]
-        fname = meta["filename"]
-        pg = meta["page"]
-        # filter by user selected
-        if body.selected_files and fname not in body.selected_files:
+        f = meta["filename"]; p = meta["page"]
+        if body.selected_files and f not in body.selected_files:
             continue
-        # filter by page range
-        lo, hi = body.selected_page_ranges.get(fname, (1, 10**6))
-        if not (lo <= pg <= hi):
+        lo, hi = body.selected_page_ranges.get(f, (1, 10**6))
+        if not lo <= p <= hi:
             continue
-
         hits.append({"score": float(dist), **meta})
         if len(hits) >= body.top_k:
             break
 
-    tav_results = {}
-    if body.web_search and TAVILY:
-        cli = TavilyClient(api_key=TAVILY)
-        tav_results = cli.search(body.prompt, search_depth="advanced",
-                                 include_raw_content=True)
-
-    # build final LLM prompt
-    ctx = {"hits": hits, "last": body.last_messages, "tavily": tav_results}
-    doc_context = json.dumps(ctx, indent=2)
-
+    # build LLM prompt (no change)
+    context = json.dumps({"hits": hits, "chat": body.last_messages}, indent=2)
+    prompt = body.prompt + "\n\n# Context\n" + context
     payload = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 4096,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": body.prompt + "\n\n# Context:\n" + doc_context
-                    }
-                ]
-            }
-        ]
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
     }
-
-    out = bedrock.invoke_model(
-        modelId=MODEL_ID,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps(payload)
-    )
-    # read the response
+    out = bedrock.invoke_model(modelId=MODEL_ID,
+                               contentType="application/json",
+                               accept="application/json",
+                               body=json.dumps(payload))
     answer = json.loads(out["body"].read())["content"][0]["text"]
     return Answer(answer=answer, context=hits)
