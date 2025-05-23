@@ -2,7 +2,6 @@
 
 """
 ==============
-
 A minimal RAG back-end for your Streamlit client.
 
 ▶︎ Quick-start
@@ -19,8 +18,8 @@ from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from docx import Document
 from pptx import Presentation
@@ -44,8 +43,8 @@ bedrock  = boto3.client("bedrock-runtime", region_name=REGION)
 # ── Globals (in-memory cache) ───────────────────────────────────────────────
 app          = FastAPI(title="Document-RAG Gateway", version="1.0.0")
 mpnet_model  = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
-faiss_index  : faiss.Index  # defined in _load_stores()
-metadata     : List[Dict]
+faiss_index  : faiss.Index  # Will be loaded at startup
+metadata     : List[Dict]   # Will be loaded at startup
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 def _load_stores() -> None:
@@ -70,6 +69,7 @@ def _embed(txt: str) -> np.ndarray:
     return mpnet_model.encode(txt, normalize_embeddings=True)
 
 def _ocr_bytes(blob: bytes) -> str:
+    """Use Amazon Textract's detect_document_text for basic OCR."""
     resp = textract.detect_document_text(Document={'Bytes': blob})
     return "\n".join(b["Text"] for b in resp.get("Blocks", [])
                      if b["BlockType"] == "LINE")
@@ -82,30 +82,50 @@ def _process_file(path: Path, owner: str) -> None:
     if ext == ".pdf":
         doc = fitz.open(path)
         for p in doc:
-            text = _ocr_bytes(p.get_pixmap().tobytes("png"))
+            # Convert page to PNG and run OCR
+            png_bytes = p.get_pixmap().tobytes("png")
+            text = _ocr_bytes(png_bytes)
             chunks.append((text, p.number + 1))
+
     elif ext in {".jpg", ".jpeg", ".png"}:
-        chunks.append((_ocr_bytes(path.read_bytes()), 1))
+        # Single image
+        img_bytes = path.read_bytes()
+        text = _ocr_bytes(img_bytes)
+        chunks.append((text, 1))
+
     elif ext in {".doc", ".docx"}:
         full = "\n".join(p.text for p in Document(path).paragraphs if p.text)
-        chunks = [(full[i:i+1000], idx+1)
-                  for idx,i in enumerate(range(0, len(full), 1000))]
+        # Simple chunking for docx
+        step = 1000
+        for i in range(0, len(full), step):
+            page_text = full[i:i+step]
+            page_num = (i // step) + 1
+            chunks.append((page_text, page_num))
+
     elif ext == ".pptx":
         prs = Presentation(path)
         for idx, slide in enumerate(prs.slides, 1):
-            txt = "\n".join(s.text for s in slide.shapes if hasattr(s, "text"))
-            chunks.append((txt, idx))
-    elif ext in {".csv", ".xlsx"}:
-        df = pd.read_csv(path) if ext==".csv" else pd.read_excel(path)
-        for i in range(0, len(df), 50):
-            chunk = df.iloc[i:i+50].to_string(index=False)
-            chunks.append((chunk, i//50 + 1))
-    else:
-        raise ValueError("Unsupported file type")
+            slide_text = "\n".join(s.text for s in slide.shapes if hasattr(s, "text"))
+            chunks.append((slide_text, idx))
 
+    elif ext in {".csv", ".xlsx"}:
+        if ext == ".csv":
+            df = pd.read_csv(path)
+        else:
+            df = pd.read_excel(path)
+        # chunk every 50 rows
+        for i in range(0, len(df), 50):
+            chunk_text = df.iloc[i:i+50].to_string(index=False)
+            page_num = (i // 50) + 1
+            chunks.append((chunk_text, page_num))
+
+    else:
+        raise ValueError(f"Unsupported file type: {ext}")
+
+    # embed & store
     for txt, page in chunks:
         vec = _embed(txt)
-        faiss_index.add(vec.reshape(1,-1))
+        faiss_index.add(vec.reshape(1, -1))
         metadata.append({
             "filename": path.name,
             "page": page,
@@ -132,45 +152,23 @@ class Answer(BaseModel):
     answer: str
     context: List[Dict]
 
-# ── End-points ───────────────────────────────────────────────────────────────
+# ── Start-up ────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def _warm():
     _load_stores()
 
-# @app.post("/upload_document", response_model=UploadAck)
-# async def upload_document(file: UploadFile = File(...),
-#                            owner: str = "anonymous",
-#                            bg: BackgroundTasks = BackgroundTasks()):
-#     fn = file.filename
-#     if not fn:
-#         raise HTTPException(400, "No filename")
-
-#     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(fn).suffix)
-#     tmp.write(await file.read()); tmp.close()
-
-#     # 1) ship raw to S3 (so users can download)
-#     with open(tmp.name, "rb") as fh:
-#         s3.upload_fileobj(fh, BUCKET, fn)
-
-#     # 2) heavy processing in background
-#     def _job():
-#         try:
-#             _process_file(Path(tmp.name), owner)
-#             _persist_stores()
-#         finally:
-#             os.remove(tmp.name)
-#     bg.add_task(_job)
-
-#     return UploadAck(status="queued", filename=fn, pages_indexed=0)
-
+# ── End-points ───────────────────────────────────────────────────────────────
 @app.post("/upload_document", response_model=UploadAck)
-async def upload_document(
-        file: UploadFile = File(...),
-        owner: str = "anonymous"):
+async def upload_document(file: UploadFile = File(...),
+                          owner: str = "anonymous"):
+    """
+    Upload a single document (PDF, image, DOCX, PPTX, XLSX, CSV) and index it synchronously.
+    """
     fn = file.filename
     if not fn:
         raise HTTPException(400, "No filename")
 
+    # Save to a temp file
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(fn).suffix)
     tmp.write(await file.read())
     tmp.close()
@@ -179,56 +177,79 @@ async def upload_document(
     with open(tmp.name, "rb") as fh:
         s3.upload_fileobj(fh, BUCKET, fn)
 
-    # 2) **process & embed synchronously**
+    # 2) process & embed synchronously
     try:
-        _process_file(Path(tmp.name), owner)          # ← embeds & adds to FAISS
-        _persist_stores()                             # ← writes & uploads index
+        _process_file(Path(tmp.name), owner)  # extracts text, embed, store in FAISS
+        _persist_stores()                    # writes & uploads index/metadata
     finally:
         os.remove(tmp.name)
 
+    # 3) count how many pages/chunks we just added
     pages = sum(1 for m in metadata if m["filename"] == fn)
     return UploadAck(status="done", filename=fn, pages_indexed=pages)
 
 @app.post("/query_documents_with_page_range", response_model=Answer)
 def query_docs(body: QueryBody):
+    """
+    Given a user prompt, a list of selected files + page ranges, returns top-K hits + LLM answer.
+    """
     if faiss_index.ntotal == 0:
         raise HTTPException(404, "Index empty")
 
-    q_vec = _embed(body.prompt).reshape(1,-1)
-    # oversample → later filter
-    D,I = faiss_index.search(q_vec, min(body.top_k*5, faiss_index.ntotal))
+    # embed the user's prompt
+    q_vec = _embed(body.prompt).reshape(1, -1)
+    # oversample, we'll filter
+    D, I = faiss_index.search(q_vec, min(body.top_k * 5, faiss_index.ntotal))
 
-    hits=[]
+    hits = []
     for dist, idx in zip(D[0], I[0]):
         meta = metadata[idx]
-        fname = meta["filename"]; pg = meta["page"]
+        fname = meta["filename"]
+        pg = meta["page"]
+        # filter by user selected
         if body.selected_files and fname not in body.selected_files:
             continue
-        lo,hi = body.selected_page_ranges.get(fname, (1,10**6))
-        if not (lo <= pg <= hi): continue
-        hits.append({"score": float(dist), **meta})
-        if len(hits) >= body.top_k: break
+        # filter by page range
+        lo, hi = body.selected_page_ranges.get(fname, (1, 10**6))
+        if not (lo <= pg <= hi):
+            continue
 
-    # optional Tavily
+        hits.append({"score": float(dist), **meta})
+        if len(hits) >= body.top_k:
+            break
+
     tav_results = {}
     if body.web_search and TAVILY:
         cli = TavilyClient(api_key=TAVILY)
         tav_results = cli.search(body.prompt, search_depth="advanced",
                                  include_raw_content=True)
 
-    # build LLM context
+    # build final LLM prompt
     ctx = {"hits": hits, "last": body.last_messages, "tavily": tav_results}
-    prompt = json.dumps(ctx, indent=2)
+    doc_context = json.dumps(ctx, indent=2)
 
     payload = {
-        "anthropic_version":"bedrock-2023-05-31",
-        "max_tokens":4096,
-        "messages":[{"role":"user","content":[{"type":"text",
-                    "text": body.prompt + "\n\n# Context:\n" + prompt}]}]
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 4096,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": body.prompt + "\n\n# Context:\n" + doc_context
+                    }
+                ]
+            }
+        ]
     }
-    out = bedrock.invoke_model(modelId=MODEL_ID,
-                               contentType="application/json",
-                               accept="application/json",
-                               body=json.dumps(payload))
+
+    out = bedrock.invoke_model(
+        modelId=MODEL_ID,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(payload)
+    )
+    # read the response
     answer = json.loads(out["body"].read())["content"][0]["text"]
     return Answer(answer=answer, context=hits)
