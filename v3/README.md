@@ -37,7 +37,7 @@ A FastAPI application for skill analysis between job descriptions and CVs.
    ```
 3. Run the application:
    ```
-   uvicorn app.main:app --reload
+   uvicorn app.main:app --reload --host=0.0.0.0
    ```
 
 ## API Documentation

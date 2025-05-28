@@ -58,22 +58,30 @@ async def create_analysis(
     
     # Perform analysis
     options = analysis_request.options.model_dump() if analysis_request.options else {}  # Using model_dump() instead of dict()
+    include_scores = options.get("includeScores", True)
     
     # Mock analysis results
     results = []
     for cv_id in analysis_request.cvIds:
         # In a real implementation, use AWS client to analyze skills
         # For development, use mock results
-        result = {
-            "cvId": cv_id,
-            "skillsFound": ["Python", "FastAPI", "AWS"],
-            "missingSkills": ["Docker", "Kubernetes"]
-        }
-        
-        # Only include matchScore if includeScores is True
-        # This ensures the field is completely absent when not needed
-        if options.get("includeScores", True):
-            result["matchScore"] = 75.5
+        if include_scores:
+            # Include matchScore only if includeScores is True
+            result = {
+                "cvId": cv_id,
+                "skillsFound": ["Python", "FastAPI", "AWS"],
+                "missingSkills": ["Docker", "Kubernetes"],
+                "matchScore": 75.5,
+                "error": None
+            }
+        else:
+            # Completely omit matchScore if includeScores is False
+            result = {
+                "cvId": cv_id,
+                "skillsFound": ["Python", "FastAPI", "AWS"],
+                "missingSkills": ["Docker", "Kubernetes"],
+                "error": None
+            }
         
         results.append(result)
     

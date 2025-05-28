@@ -16,6 +16,6 @@ openpyxl
 pytest
 httpx
 torch
+torchvision
 torchaudio
 psutil
-torchvision
