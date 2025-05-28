@@ -1,0 +1,20 @@
+"""
+Requirements file for the FastAPI application.
+"""
+fastapi==0.103.1
+uvicorn==0.23.2
+pydantic==2.3.0
+pydantic-settings==2.0.3
+python-multipart==0.0.6
+python-jose==3.3.0
+passlib==1.7.4
+boto3==1.28.40
+sentence-transformers==2.2.2
+faiss-cpu==1.7.4
+pymupdf==1.22.5
+python-docx==1.0.0
+python-pptx==0.6.21
+pandas==2.1.0
+openpyxl==3.1.2
+pytest==7.4.2
+httpx==0.24.1
