@@ -1,0 +1,54 @@
+John Smith
+Senior Software Engineer
+
+Contact Information:
+Email: john.smith@email.com
+Phone: (555) 123-4567
+Location: San Francisco, CA
+
+Professional Experience:
+
+Senior Software Engineer at TechCorp (2020-2023)
+- Developed Python applications using Django framework
+- Built REST APIs serving 1M+ requests daily
+- Worked with PostgreSQL databases and Redis caching
+- Implemented Docker containerization for microservices
+- Used AWS EC2 and S3 for cloud deployment
+- Collaborated using Git and GitHub
+- Led a team of 3 junior developers
+
+Software Engineer at StartupXYZ (2018-2020)
+- Built web applications with Flask and SQLAlchemy
+- Developed machine learning models using scikit-learn
+- Created data pipelines for analytics
+- Worked in Agile development environment
+- Implemented CI/CD pipelines using Jenkins
+
+Junior Developer at WebSolutions (2016-2018)
+- Developed web applications using Python and JavaScript
+- Worked with MySQL databases
+- Learned version control with Git
+- Participated in code reviews
+
+Technical Skills:
+- Programming Languages: Python, JavaScript, SQL, HTML, CSS
+- Frameworks: Django, Flask, React, Vue.js
+- Databases: PostgreSQL, MongoDB, MySQL, Redis
+- Cloud Platforms: AWS (EC2, S3, RDS), Docker, Kubernetes
+- Tools: Git, Jenkins, JIRA, VS Code
+- Machine Learning: scikit-learn, pandas, numpy, matplotlib
+
+Education:
+Bachelor of Science in Computer Science
+University of California, Berkeley (2012-2016)
+GPA: 3.7/4.0
+
+Certifications:
+- AWS Certified Developer Associate
+- Docker Certified Associate
+
+Projects:
+- E-commerce Platform: Built scalable e-commerce platform using Django and PostgreSQL
+- ML Recommendation System: Developed recommendation engine using scikit-learn
+- Microservices Architecture: Designed and implemented microservices using Docker and Kubernetes
+
